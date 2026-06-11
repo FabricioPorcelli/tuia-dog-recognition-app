@@ -95,12 +95,14 @@ tp2/
 └── .env.docker.example / .env.local.example
 ```
 
-# Preparando el ambiente local
+# Preparando el ambiente
 
-## Requisitos para trabajar de forma local
+## Requisitos
 
 - Python 3.12
-- Docker
+- Docker Desktop (incluye Docker Compose)
+- Git
+- Cuenta de Kaggle (para descargar el dataset)
 
 ## Dataset
 
@@ -129,7 +131,9 @@ Puede que el reinicio automatico no funcione en todas las versiones de Docker De
 sistemas *Windows*, en tal caso deberan correr los comandos como se mencionan en el
 siguiente apartado para actualizar el codigo dentro de docker.
 
-## Opcion 1 - Corriendo dentro de docker
+## Opcion 1 - Corriendo todo dentro de docker
+
+Es la forma en que la catedra evaluara el trabajo.
 
 ### 1. Buildea y corre la aplicacion.
 
@@ -140,67 +144,132 @@ docker compose build
 docker compose up -d
 ```
 
-## Opcion 2 - Configurando el ambiente local
+Servicios disponibles: frontend en `http://localhost:8080`, backend en `http://localhost:8000`,
+postgres en `localhost:5432`.
 
-### 1. Install uv
+## Opcion 2 - Configurando el ambiente local desde cero
 
-Para usuarios de Linux o Mac:
+### 1. Clona tu fork
 
 ```bash
+git clone <url-de-tu-fork>
+cd tuia-dog-recognition-app
+```
+
+### 2. Crea un entorno virtual con Python 3.12
+
+Con python estandar:
+
+```bash
+# Linux / Mac
+python3.12 -m venv .venv
+
+# Windows
+py -3.12 -m venv .venv
+```
+
+Alternativa con [uv](https://docs.astral.sh/uv/getting-started/installation/):
+
+```bash
+# Instalar uv en Linux / Mac
 curl -LsSf https://astral.sh/uv/install.sh | sh
-```
 
-Para usuarios de Windows :
-
-```bash
+# Instalar uv en Windows (PowerShell)
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
 
-[Link](!https://docs.astral.sh/uv/getting-started/installation/#__tabbed_1_1) a la documentacion de uv.
-
-### 2. Configura un ambiente virtual con python 3.12
-
-```bash
+# Crear el entorno
 uv venv --python 3.12 .venv
 ```
 
-### 3. Activa el virtual environment
+### 3. Activa el entorno virtual
 
 ```bash
+# Linux / Mac
 source .venv/bin/activate
 ```
 
-### 4. Instala las dependencias.
+```powershell
+# Windows (PowerShell)
+.venv\Scripts\Activate.ps1
+
+# Windows (cmd)
+.venv\Scripts\activate.bat
+```
+
+### 4. Instala las dependencias
 
 ```bash
+pip install -r requirements.txt
+# o, si usas uv:
 uv pip install -r requirements.txt
 ```
 
-### 5. Inicia la base de datos
+### 5. Configura las variables de entorno
+
+Copia el ejemplo local a `src/.env` y ajustalo a tus necesidades. El backend local y los
+scripts de `scripts/` leen la configuracion desde ese archivo.
+
+```bash
+# Linux / Mac
+cp .env.local.example src/.env
+```
+
+```powershell
+# Windows
+copy .env.local.example src\.env
+```
+
+### 6. Descarga el dataset
+
+```bash
+python scripts/download_dataset.py
+```
+
+Requiere [credenciales de Kaggle](https://www.kaggle.com/docs/api) configuradas. Si no las
+tenes, descarga el dataset manualmente desde Kaggle y descomprimi `train/`, `valid/` y
+`test/` dentro de `data/dataset`.
+
+### 7. Inicia la base de datos
 
 ```bash
 docker compose up postgres -d
 ```
 
-### 6. Inicia el frontend
+Solo es necesaria con `USE_PGVECTOR=true` (default). Con `USE_PGVECTOR=false` se usa la
+base vectorial JSON (`data/embeddings.json`) y no hace falta docker para trabajar localmente.
+
+### 8. Inicia el backend
+
+```bash
+cd src
+uvicorn app.main:app --reload --port 8000
+```
+
+### 9. Inicia el frontend (en otra terminal, con el venv activado)
 
 ```bash
 cd src
 uvicorn frontend.app:app --port 8080
 ```
 
-### 7. Inicia el backend
+### 10. Verifica que todo este corriendo
 
-Asegurate de configurar el archivo *.env.local.example* para que se adapte a tus necesidades.
+- Frontend: `http://localhost:8080`
+- Backend: `http://localhost:8000/health` (muestra el modelo seleccionado y los checkpoints encontrados)
 
-```bash
-cp ../.env.local.example src/.env
-uvicorn app.main:app --reload --port 8000
-```
+### 11. A trabajar
+
+1. Implementa las funciones de la Etapa 1 en `src/lib/services/similarity_service.py`.
+2. Indexa el dataset en la base vectorial: `python scripts/build_index.py --split train`
+   (desde la raiz del repo).
+3. Proba la busqueda por similitud desde el frontend (pestaña Etapa 1).
+4. Continua con las Etapas 2, 3 y 4. Documenta los experimentos en `train.ipynb` y el
+   informe en `informe.ipynb`.
 
 ## Scripts provistos
 
-Con el ambiente local activo (y postgres corriendo si `USE_PGVECTOR=true`):
+Se ejecutan desde la raiz del repositorio con el ambiente local activo (y postgres corriendo
+si `USE_PGVECTOR=true`). Leen la configuracion de `src/.env` si existe:
 
 ```bash
 # Descargar el dataset de Kaggle a data/dataset

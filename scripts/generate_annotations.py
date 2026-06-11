@@ -9,11 +9,20 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+SRC = ROOT / "src"
+sys.path.insert(0, str(SRC))
+
+# Directorio desde donde se invoco el script (para resolver rutas pasadas por CLI).
+LAUNCH_DIR = Path.cwd()
+
+# Usa la misma configuracion que el backend local (src/.env, con paths relativos a src/).
+# Si src/.env no existe, se usan los defaults con paths relativos a la raiz del repo.
+os.chdir(SRC if (SRC / ".env").is_file() else ROOT)
 
 
 def main() -> None:
@@ -35,7 +44,11 @@ def main() -> None:
     detection = build_detection(settings, classifier)
     pipeline = build_pipeline(settings, detection)
 
-    output = pipeline.generate_annotations(args.folder, args.output_format)
+    folder = Path(args.folder)
+    if not folder.is_absolute():
+        folder = (LAUNCH_DIR / folder).resolve()
+
+    output = pipeline.generate_annotations(str(folder), args.output_format)
     print(f"Anotaciones generadas en: {output}")
 
 

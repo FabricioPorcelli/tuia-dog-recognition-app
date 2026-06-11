@@ -11,11 +11,17 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+SRC = ROOT / "src"
+sys.path.insert(0, str(SRC))
+
+# Usa la misma configuracion que el backend local (src/.env, con paths relativos a src/).
+# Si src/.env no existe, se usan los defaults con paths relativos a la raiz del repo.
+os.chdir(SRC if (SRC / ".env").is_file() else ROOT)
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
