@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     postgres_password: str = os.getenv("POSTGRES_PASSWORD", "dogs_pass")
 
 
+# ImageNet normalization constants (mean/std por canal)
+# Usados por similarity_service y classifier_service para
+# transforms.Normalize()
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
