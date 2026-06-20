@@ -102,13 +102,14 @@ class ClassifierService:
         # ------------------------------------------------------------------
         # Hiperparametros
         # ------------------------------------------------------------------
-        # ResNet18 fine-tuning: 10 epochs con lr=0.001 alcanzan para converger.
-        # CNN custom: requiere mas epochs (20) y menor lr (0.0005) porque
-        # entrena desde cero y tiene 8 capas convolucionales.
+        # CNN custom: 20 epochs para aprender desde cero.
+        # ResNet18: 10 epochs alcanzan por el pre-entrenamiento.
         # batch_size=32: balance entre memoria GPU y estabilidad del gradiente.
+        # learning_rate=0.001: valor tipico para Adam, funciona bien en
+        # fine-tuning y en entrenamiento desde cero con esta arquitectura.
         num_epochs = 20 if self.active_model_name == "cnn_custom" else 10
         batch_size = 32
-        learning_rate = 0.0005 if self.active_model_name == "cnn_custom" else 0.001
+        learning_rate = 0.001
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info("Usando dispositivo: %s", device)
 
@@ -176,9 +177,12 @@ class ClassifierService:
         #   ImageNet; solo reentrenamos la ultima capa (fine-tuning).
         #
         # Modelo B (cnn_custom):
-        #   CNN desde cero con 5 bloques Conv2D + BatchNorm + ReLU + MaxPool,
-        #   seguidas de AdaptiveAvgPool2d, Flatten y una capa Linear final.
-        #   Arquitectura simple pero suficiente para el dataset.
+        #   CNN desde cero con 5 bloques Conv2D (bias=False) + BatchNorm +
+        #   ReLU + MaxPool, seguidas de AdaptiveAvgPool2d, Flatten,
+        #   Dropout(0.3) y un clasificador MLP de 2 capas (512->128->raza).
+        #   bias=False en Conv2d porque BatchNorm ya tiene su propio bias.
+        #   El MLP intermedio (512->128) actua como bottleneck que fuerza
+        #   la compresion de features, y Dropout previene overfitting.
         if self.active_model_name == "resnet18_finetuned":
             model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
             model.fc = nn.Linear(model.fc.in_features, num_classes)
@@ -187,39 +191,30 @@ class ClassifierService:
                 nn.Conv2d(3, 32, kernel_size=3, padding=1, bias=False),
                 nn.BatchNorm2d(32),
                 nn.ReLU(),
-                nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False),
-                nn.BatchNorm2d(32),
-                nn.ReLU(),
                 nn.MaxPool2d(2),
                 nn.Conv2d(32, 64, kernel_size=3, padding=1, bias=False),
-                nn.BatchNorm2d(64),
-                nn.ReLU(),
-                nn.Conv2d(64, 64, kernel_size=3, padding=1, bias=False),
                 nn.BatchNorm2d(64),
                 nn.ReLU(),
                 nn.MaxPool2d(2),
                 nn.Conv2d(64, 128, kernel_size=3, padding=1, bias=False),
                 nn.BatchNorm2d(128),
                 nn.ReLU(),
-                nn.Conv2d(128, 128, kernel_size=3, padding=1, bias=False),
-                nn.BatchNorm2d(128),
-                nn.ReLU(),
                 nn.MaxPool2d(2),
                 nn.Conv2d(128, 256, kernel_size=3, padding=1, bias=False),
                 nn.BatchNorm2d(256),
                 nn.ReLU(),
-                nn.Conv2d(256, 256, kernel_size=3, padding=1, bias=False),
-                nn.BatchNorm2d(256),
+                nn.MaxPool2d(2),
+                nn.Conv2d(256, 512, kernel_size=3, padding=1, bias=False),
+                nn.BatchNorm2d(512),
                 nn.ReLU(),
                 nn.MaxPool2d(2),
                 nn.AdaptiveAvgPool2d((1, 1)),
                 nn.Flatten(),
-                nn.Dropout(0.5),
             )
             classifier = nn.Sequential(
-                nn.Linear(256, 128),
-                nn.ReLU(),
                 nn.Dropout(0.3),
+                nn.Linear(512, 128),
+                nn.ReLU(),
                 nn.Linear(128, num_classes),
             )
             model = nn.Sequential(backbone, classifier)
@@ -229,15 +224,15 @@ class ClassifierService:
         # ------------------------------------------------------------------
         # Funcion de perdida, optimizador y scheduler
         # ------------------------------------------------------------------
-        # CrossEntropyLoss con label_smoothing=0.1 suaviza las etiquetas
-        # one-hot, mejorando generalizacion.
-        # Adam con weight_decay=1e-4 regula los pesos (decaimiento L2).
-        # ReduceLROnPlateau: baja el LR si la loss de validacion se
-        # estanca por 3 epochs.
-        criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+        # CrossEntropyLoss: funcion estandar para clasificacion multiclase.
+        # Combina LogSoftmax + NLLLoss.
+        # Adam con weight_decay=1e-4: regularizacion L2 suave.
+        # ReduceLROnPlateau: reduce el LR a la mitad si la loss de
+        # validacion no mejora por 5 epochs.
+        criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode="min", factor=0.5, patience=3,
+            optimizer, mode="min", factor=0.5, patience=5,
         )
 
         # ------------------------------------------------------------------
