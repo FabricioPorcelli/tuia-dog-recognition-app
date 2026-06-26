@@ -7,7 +7,12 @@ from uuid import uuid4
 
 import cv2
 import numpy as np
+import onnxruntime
+import torch
+from torchvision import datasets, transforms
+from ultralytics import YOLO
 
+from lib.config import IMAGENET_MEAN, IMAGENET_STD
 from lib.schemas import ClassifyResult, DetectResult, DogDetection
 from lib.services.classifier_service import ClassifierService
 
@@ -75,7 +80,27 @@ class DetectionService:
 
         Retorna una lista de ((x1, y1, x2, y2), confidence) en pixeles.
         """
-        raise NotImplementedError("Etapa 3: implementar detect_dogs")
+
+        # Cache del modelo YOLO para evitar recargar el .pt en cada llamada.
+        # Ultralytics descarga automaticamente el modelo la primera vez.
+        if not hasattr(self, '_yolo_model'):
+            self._yolo_model = YOLO(self.yolo_model_name)
+
+        # Inferencia sobre la imagen original (BGR). YOLO maneja la conversion
+        # interna a RGB. verbose=False silencia los logs de ultralytics.
+        results = self._yolo_model(image, verbose=False)[0]
+
+        # Recorremos todas las detecciones y filtramos solo perros (COCO id 16)
+        # que superen el umbral de confianza configurado.
+        detections = []
+        for box in results.boxes:
+            cls_id = int(box.cls.item())
+            conf = float(box.conf.item())
+            if cls_id == self.dog_class_id and conf >= self.conf_threshold:
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                detections.append(((int(x1), int(y1), int(x2), int(y2)), conf))
+
+        return detections
 
     def classify_detected_dog(self, crop: np.ndarray) -> tuple[str, float]:
         """
@@ -84,7 +109,59 @@ class DetectionService:
 
         El recorte llega en BGR (OpenCV). Retorna (raza, score).
         """
-        raise NotImplementedError("Etapa 3: implementar classify_detected_dog")
+        # Cargamos el modelo entrenado en Etapa 2 (con cache interno del
+        # ClassifierService). Soportamos .pth (PyTorch) y .onnx (ONNX).
+        model_raw = self.classifier.load_model()
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        is_onnx = isinstance(model_raw, onnxruntime.InferenceSession)
+
+        # Pipeline de preprocesamiento identico al usado en entrenamiento
+        # (Resize + ToTensor + Normalize con medias/std de ImageNet).
+        # No aplicamos data augmentation porque es inferencia.
+        transform = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.Resize((self.classifier.image_size, self.classifier.image_size)),
+            transforms.ToTensor(),
+            transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
+        ])
+
+        # Convertimos de BGR (OpenCV) a RGB y anyadimos dimension batch.
+        rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+        input_tensor = transform(rgb).unsqueeze(0)
+
+        # Cache de nombres de razas: leemos la estructura de directorios
+        # de validacion una sola vez. ImageFolder asigna los mismos indices
+        # que durante entrenamiento (orden alfabetico por nombre de carpeta).
+        if not hasattr(self, '_class_names'):
+            val_dataset = datasets.ImageFolder(
+                root=str(self.classifier.dataset_path / "valid"),
+                transform=transforms.Compose([
+                    transforms.Resize((self.classifier.image_size, self.classifier.image_size)),
+                    transforms.ToTensor(),
+                ]),
+            )
+            self._class_names = val_dataset.classes
+
+        # Inferencia con el formato del checkpoint.
+        # ONNX requiere entrada numpy y no soporta .to(device).
+        # PyTorch usa torch.no_grad() para eficiencia.
+        if is_onnx:
+            input_name = model_raw.get_inputs()[0].name
+            outputs = model_raw.run(None, {input_name: input_tensor.cpu().numpy()})[0]
+            probs = torch.softmax(torch.from_numpy(outputs), dim=1)
+        else:
+            model = model_raw.to(device)
+            model.eval()
+            with torch.no_grad():
+                outputs = model(input_tensor.to(device))
+                probs = torch.softmax(outputs, dim=1)
+
+        # Tomamos la clase con mayor probabilidad y la mapeamos a nombre de raza.
+        pred_idx = torch.argmax(probs, dim=1).item()
+        score = probs[0, pred_idx].item()
+        breed = self._class_names[pred_idx]
+
+        return (breed, score)
 
     # ------------------------------------------------------------------
     # Orquestacion provista
