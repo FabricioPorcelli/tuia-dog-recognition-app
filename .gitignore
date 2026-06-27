@@ -16,3 +16,5 @@ data/dataset/*
 !data/dataset/.gitkeep
 runs/
 .DS_Store
+desktop.ini
+data/embeddings.json
