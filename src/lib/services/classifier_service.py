@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import onnxruntime
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from torchvision import datasets, transforms, models
 from tqdm import tqdm
 
@@ -160,8 +160,19 @@ class ClassifierService:
             num_classes, len(train_dataset), len(val_dataset),
         )
 
+        # ------------------------------------------------------------------
+        # WeightedRandomSampler para balancear clases minoritarias
+        # ------------------------------------------------------------------
+        # Las clases minoritarias se muestrean con mayor probabilidad para
+        # que cada epoch vea un numero balanceado de ejemplos por raza.
+        # Peso de cada clase = 1.0 / frecuencia de la clase.
+        train_labels = [train_dataset.targets[i] for i in range(len(train_dataset))]
+        class_weights = 1.0 / np.bincount(train_labels)
+        sample_weights = [class_weights[t] for t in train_labels]
+        sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_dataset), replacement=True)
+
         train_loader = DataLoader(
-            train_dataset, batch_size=batch_size, shuffle=True, num_workers=2,
+            train_dataset, batch_size=batch_size, sampler=sampler, num_workers=2,
         )
         val_loader = DataLoader(
             val_dataset, batch_size=batch_size, shuffle=False, num_workers=2,
