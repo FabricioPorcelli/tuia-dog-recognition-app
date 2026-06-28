@@ -103,11 +103,11 @@ class ClassifierService:
         # Hiperparametros
         # ------------------------------------------------------------------
         # CNN custom: 20 epochs para aprender desde cero.
-        # ResNet18: 10 epochs alcanzan por el pre-entrenamiento.
+        # ResNet18: 5 epochs alcanzan porque solo entrenamos la FC head
+        # (backbone congelado, no se fine-tunean las capas convolucionales).
         # batch_size=32: balance entre memoria GPU y estabilidad del gradiente.
-        # learning_rate=0.001: valor tipico para Adam, funciona bien en
-        # fine-tuning y en entrenamiento desde cero con esta arquitectura.
-        num_epochs = 20 if self.active_model_name == "cnn_custom" else 10
+        # learning_rate=0.001: valor tipico para Adam.
+        num_epochs = 20 if self.active_model_name == "cnn_custom" else 5
         batch_size = 32
         learning_rate = 0.001
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -182,10 +182,11 @@ class ClassifierService:
         # Construccion del modelo segun self.active_model_name
         # ------------------------------------------------------------------
         # Modelo A (resnet18_finetuned):
-        #   ResNet18 pre-entrenado en ImageNet. Reemplazamos la capa fc
-        #   (original: 512->1000 clases) por una nueva 512->num_classes.
-        #   El backbone ya reconoce bordes, texturas y formas gracias a
-        #   ImageNet; solo reentrenamos la ultima capa (fine-tuning).
+        #   ResNet18 pre-entrenado en ImageNet. Congelamos todo el backbone
+        #   (requires_grad=False) para preservar las features aprendidas en
+        #   ImageNet. Solo reemplazamos y entrenamos la capa fc (512->raza).
+        #   Esto evita que el modelo "olvide" las features generales al
+        #   fine-tunear con solo ~100 imagenes/raza.
         #
         # Modelo B (cnn_custom):
         #   CNN desde cero con 5 bloques Conv2D (bias=False) + BatchNorm +
@@ -196,6 +197,8 @@ class ClassifierService:
         #   la compresion de features, y Dropout previene overfitting.
         if self.active_model_name == "resnet18_finetuned":
             model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
+            for param in model.parameters():
+                param.requires_grad = False
             model.fc = nn.Linear(model.fc.in_features, num_classes)
         else:
             backbone = nn.Sequential(
@@ -241,7 +244,10 @@ class ClassifierService:
         # ReduceLROnPlateau: reduce el LR a la mitad si la loss de
         # validacion no mejora por 5 epochs.
         criterion = nn.CrossEntropyLoss()
-        optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+        optimizer = optim.Adam(
+            filter(lambda p: p.requires_grad, model.parameters()),
+            lr=learning_rate, weight_decay=1e-4,
+        )
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode="min", factor=0.5, patience=5,
         )
